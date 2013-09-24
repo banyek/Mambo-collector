@@ -1,0 +1,41 @@
+# Sample configuration file for mambo-collector
+#
+# (c) Balazs Pocze <banyek@gmail.com>
+#
+# The configuration file has two parts, the first contains the connection parameters which will be used to connect the local mysql server
+# and to send data to statsd daemon.
+#
+# [config]
+#
+# mysql_host = localhost
+# mysql_user = username
+# mysql_password = password
+# hostname = localhost.localdomain
+# statsd_host = 192.168.1.1
+# statsd_port = 8125
+#
+# Here starts the metrics part. Each section contains a full metrics. '[Section name]'' will be used as key in graphite,
+# 'rate' contains the sample rate of metrics (in seconds),
+# 'sql' contains the query to run. Note: At this point you can only give one liner sql queries.
+#
+# [replication_lag]
+#
+# rate = 10.0
+# sql = select timestamp(now()) - timestamp(ts) as replication_lag from info_schema.heartbeat where server_id = 1;
+#
+# [connections_all]
+#
+# rate = 10.0
+# sql = SELECT COUNT(*) FROM PROCESSLIST
+#
+# [connections_alive]
+#
+# rate = 10.0
+# sql = select count(*) from processlist where command !='Sleep'
+#
+# [connections_max]
+#
+# rate = 10.0
+# sql = select @@max_connections
+#
+#
