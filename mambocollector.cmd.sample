@@ -1,0 +1,22 @@
+# Sample configuration file for mambo-collector
+#
+# (c) Balazs Pocze <banyek@gmail.com>
+#
+#[replication_lag]
+#
+#metricname = mysql.servername.replication_lag
+#rate = 10.0
+#query = select timestamp(now()) - timestamp(ts) as replication_lag from test.heartbeat where server_id = 1;
+#
+#
+#[connections_all]
+#
+#metricname = mysql.servername.connections_all
+#rate = 1.0
+#query = SELECT COUNT(*) FROM PROCESSLIST
+#
+#[connections_alive]
+#
+#metricname = mysql.servername.connections_alive
+#rate = 1.0
+#query = select count(*) from processlist where command !='Sleep'

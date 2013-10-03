@@ -1,0 +1,47 @@
+#! /bin/bash
+# SAMPLE INIT FILE FOR REDHAT / CENTOS
+#
+# Start / Stop Mambo collector
+#
+### BEGIN INIT INFO
+# Provides: $mambocollector
+# Required-Start: $mysql
+# Default-Start:  2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: MySQL Statsd data collector
+# Description: MySQL Statsd data collector
+### END INIT INFO
+
+# If the different parts are installed not in the default directory here you can overwrite their place
+# MAMBOCFG: Main config file. Can ve the same as the command file.
+# export MAMBOCFG='/etc/mambo/config.cnf'
+# MAMBOCMD: Command file. Can be the same as the config file
+# export MAMBOCMD='/etc/mambo/commands.cnf'
+# MAMBOLOG: Log file path
+# export MAMBOLOG='/var/log/mambo.log'
+# MAMBOPID: Pid file path
+# export MAMBOPID='/var/run/mambo.pid'
+# Error path. Default console.
+# export MAMBOERR='/dev/tty'
+# MAMBODBG: If set to 1 debugmessages will be shown up.
+# export MAMBODBG='1'
+
+
+case "$1" in
+   start)
+    /home/banyek/mambo/mambo start
+    RETVAL=$?
+    ;;
+   stop)
+    /home/banyek/mambo/mambo stop
+    RETVAL=$?
+    ;;
+   restart)
+    /home/banyek/mambo/mambo restart
+    RETVAL=$?
+    ;;
+   *)
+    echo "Usage: /etc/init.d/mambo start|stop|restart"
+    exit 1
+    ;;
+esac
