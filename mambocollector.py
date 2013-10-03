@@ -1,4 +1,6 @@
-mport ConfigParser
+#!/usr/bin/python -u
+
+import ConfigParser
 import threading
 import MySQLdb
 import sys
