@@ -13,7 +13,15 @@ from datetime import datetime
 
 class MySQLWorker(threading.Thread):
 
+# MySQL worker thread. Logs in to the MySQL server, and runs the query against it. 
+# The result of the query will be sended with statsdsender
+
+
 	def __init__(self, mysqlconf, command, statsdsender, logger):
+# Initializes worker thread. 
+# MySQL connection parameters get from config file
+# Commands get from commandfile
+
 		self.mysql_host = mysqlconf["mysql_host"][0]
 		self.mysql_user = mysqlconf["mysql_user"][0]
 		self.mysql_password = mysqlconf["mysql_password"][0]
@@ -32,7 +40,7 @@ class MySQLWorker(threading.Thread):
 			try:
 				db = MySQLdb.connect(host=self.mysql_host,user=self.mysql_user,passwd=self.mysql_password,db=self.mysql_database)
 			except:
-                                print "Cannot connect to MySQL host"
+        print "Cannot connect to MySQL host"
 			dbcursor = db.cursor()
 			dbcursor.execute(self.query)
 			for rawdata in dbcursor.fetchone():
@@ -96,7 +104,7 @@ class Mambo(object):
 		logger.start()
 		logger.log("Mambo started")
 		workers = []
-		self.checkfile(self.configfile)
+    self.checkfile(self.configfile)
 		statsdconf = self.configreader(self.configfile, 'statsd')
 		statsd = StatsdSender(statsdconf,logger)
 		mysqlconf = self.configreader(self.configfile, 'mysql')
