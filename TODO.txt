@@ -1,0 +1,5 @@
+ToDo's (2014.03.17)
+------
+
+* Remove current work model as not spawning separate threads for each command. The 'sleep' commands are not optimal - needs a scheduler
+* Make mambo plugin based, it could be nice if in the future it not only checks MySQL, but /redis,mondoDB, PostgreSQL, etc)

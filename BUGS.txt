@@ -1,0 +1,6 @@
+Known BUGS (2014.03.17)
+----------
+
+* Currently a MySQL command (query) needs to written in a single line command
+* In every daemon restart, it writes over the logfile. This is because of the 'python-daemon' package. A simple change in the daemon package could solve the problem, see here: https://github.com/arnaudsj/python-daemon/pull/2
+
