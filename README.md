@@ -23,5 +23,5 @@ mambocollector restart
 Dependencies
 ------------
 
-mysql2
-daemon
+* mysql2
+* daemon
