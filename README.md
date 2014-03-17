@@ -16,9 +16,9 @@ The mambocollector reads it's configuraton file, daemonizes itself, and start ba
 Usage
 -----
 
-mambocollector start
-mambocollector stop
-mambocollector restart
+* mambocollector start
+* mambocollector stop
+* mambocollector restart
 
 Dependencies
 ------------
