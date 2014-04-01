@@ -1,4 +1,4 @@
-#!/usr/bin/python -u
+#!/usr/bin/python
 
 import ConfigParser             # Read config files
 import threading                # Multithreading
@@ -7,7 +7,7 @@ import sys                      # Write data to stdout/stderr
 import time                     # time.sleep()
 import socket                   # Send data to statsd (UDP)
 import os                       # Get environmental variables
-import Queue                    # Handle logging because of threads
+import logging			# Logging module
 from daemon import runner       # Run mambo as a daemon
 from datetime import datetime   # Write log messages
 
@@ -15,7 +15,7 @@ from datetime import datetime   # Write log messages
 class MySQLWorker(threading.Thread):
 # MySQL Worker class. Connects to MySQL server, runs queries against it, and prepare data to send to Statsd.
 
-    def __init__(self, mysqlconf, command, statsdsender, logger):
+    def __init__(self, mysqlconf, command, statsdsender):
         self.mysql_host = mysqlconf["mysql_host"][0]
         self.mysql_user = mysqlconf["mysql_user"][0]
         self.mysql_password = mysqlconf["mysql_password"][0]
@@ -24,14 +24,13 @@ class MySQLWorker(threading.Thread):
         self.rate = float(command["rate"][0])
         self.query = command["query"][0]
         self.statsdsender = statsdsender
-        self.logger = logger
         super(MySQLWorker, self).__init__()
-        self.logger.log("MySQLWorker created")
+        logging.warning("MySQLWorker created")
 
     def run(self):
     # Runs queries against server in an infinite loop
 
-        self.logger.log("MySQLWorker started")
+        logging.warning("MySQLWorker started")
         while True:
             try:
                 db = MySQLdb.connect(host=self.mysql_host, user=self.mysql_user, passwd=self.mysql_password, db=self.mysql_database)
@@ -40,22 +39,21 @@ class MySQLWorker(threading.Thread):
             	for rawdata in dbcursor.fetchone():
                 	metricdata = self.metricname+":"+str(rawdata)+"|c"
             	self.statsdsender.send(metricdata)
-            	self.logger.debuglog(metricdata)
+            	logging.debug(metricdata)
             	db.close()
             except:
-                self.logger.log("Cannot connect to MySQL host")
+                logging.error("Cannot connect to MySQL host")
             time.sleep(self.rate)
 
 
 class StatsdSender(object):
 # This class sends data to Statsd server
 
-    def __init__(self, statsdconf, logger):
+    def __init__(self, statsdconf):
         self.statsd_host = statsdconf["statsd_host"][0]
         self.statsd_port = int(statsdconf["statsd_port"][0])
         super(StatsdSender, self).__init__()
-        self.logger = logger
-        self.logger.log("StatsdSender created")
+        logging.warning("StatsdSender created")
 
     def send(self, message):
         # Send data
@@ -63,46 +61,16 @@ class StatsdSender(object):
         sock.sendto(message, (self.statsd_host, self.statsd_port))
 
 
-class Logger(threading.Thread):
-# Logger, to maintain threads logging in human readable format.
-
-    def __init__(self, debug):
-        self.msgqueue = Queue.Queue()
-        self.debug = debug
-        super(Logger, self).__init__()
-
-    def log(self, message):
-        # Puts message to message queue
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        fullmsg = now + " - " + message + "\n"
-        self.msgqueue.put(fullmsg)
-
-    def debuglog(self, message):
-        # If debug set (MAMBODBG environmental variable set to 1) puts debug message to message queue
-        if self.debug == "1":
-            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            fullmsg = now + " - DEBUG: " + message + "\n"
-            self.msgqueue.put(fullmsg)
-
-    def run(self):
-        # Runs message queue, prints out data.
-        while True:
-            msg = self.msgqueue.get()
-            sys.stdout.write(msg)
-            self.msgqueue.task_done()
-
-
 class Mambo(object):
 # Main program. Initializes the logger, the statsd sender, and mysql workers
 
     def __init__(self):
         self.stdin_path = '/dev/null'
-        self.stdout_path = os.getenv('MAMBOLOG', '/var/log/mambo.log')
-        self.stderr_path = os.getenv('MAMBOERR', '/dev/tty')
+        self.stdout_path = '/dev/tty'
+        self.stderr_path = '/dev/tty'
         self.pidfile_path = os.getenv('MAMBOPID', '/var/run/mambo.pid')
         self.configfile = os.getenv('MAMBOCFG', '/etc/mambo/config.cnf')
         self.commandfile = os.getenv('MAMBOCMD', '/etc/mambo/commands.cnf')
-        self.debug = os.getenv('MAMBODBG', '0')
         self.pidfile_timeout = 5
 
     def configreader(self, config, section):
@@ -128,30 +96,26 @@ class Mambo(object):
             with open(file):
                 pass
         except IOError:
-            sys.stderr.wirte("Can't open file")
+            logging.error("Can't open file")
             exit(1)
 
     def run(self):
         # Main program thread.
 
-        # Set up, and start logger threads.
-        logger = Logger(self.debug)
-        logger.daemon = True
-        logger.start()
-        logger.log("Mambo started")
+        logging.basicConfig(filename='/var/log/mambocollector.log'), level=logging.DEBUG, format='%(asctime)s %(message)s')
 
         # Initializes workers
         workers = []
         self.checkfile(self.configfile)
         # Read statsd configuration, and creates an instance
         statsdconf = self.configreader(self.configfile, 'statsd')
-        statsd = StatsdSender(statsdconf, logger)
+        statsd = StatsdSender(statsdconf)
         # Reads mysql configs and mysql commands, sets up mysql workers
         mysqlconf = self.configreader(self.configfile, 'mysql')
         commands = self.commandreader(self.commandfile)
         for command in commands:
             com = self.configreader(self.commandfile, command)
-            worker = MySQLWorker(mysqlconf, com, statsd, logger)
+            worker = MySQLWorker(mysqlconf, com, statsd)
             workers.append(worker)
         for worker in workers:
             worker.daemon = True

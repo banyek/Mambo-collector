@@ -44,12 +44,10 @@ There is two configuration files used, one for the connection parameters, and th
 
   The collector daemon can be fine tuned from different enviromental variables. I recommend to set up these variables in the daemon init scripts (See examples)
 
-  MAMBOLOG this variable sets up the log file where the mambocollector logs data & debug data defaults to '/var/log/mambo.log'
-  MAMBOERR this variable sets up where to log the error messages defaults to '/dev/tty' (console)
   MAMBOPID pidfile location defaults to '/var/run/mambo.pid'
   MAMBOCFG config file name, defaults to '/etc/mambo/config.cnf'
   MAMBOCMD command file name, defaults to '/etc/mambo/commands.cnf'
-  
+
 
 Usage
 -----

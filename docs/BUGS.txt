@@ -1,0 +1,4 @@
+Known BUGS (2014.03.17)
+----------
+
+* Currently a MySQL command (query) needs to written in a single line command
