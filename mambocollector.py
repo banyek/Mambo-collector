@@ -102,7 +102,7 @@ class Mambo(object):
     def run(self):
         # Main program thread.
 
-        logging.basicConfig(filename='/var/log/mambocollector.log'), level=logging.DEBUG, format='%(asctime)s %(message)s')
+        logging.basicConfig(filename='/var/log/mambocollector.log', level=logging.DEBUG, format='%(asctime)s %(message)s')
 
         # Initializes workers
         workers = []
