@@ -1,4 +1,5 @@
-#!/usr/bin/python
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 import ConfigParser             # Read config files
 import threading                # Multithreading
@@ -7,7 +8,7 @@ import sys                      # Write data to stdout/stderr
 import time                     # time.sleep()
 import socket                   # Send data to statsd (UDP)
 import os                       # Get environmental variables
-import logging			# Logging module
+import logging                  # Logging module
 from daemon import runner       # Run mambo as a daemon
 from datetime import datetime   # Write log messages
 
@@ -25,24 +26,27 @@ class MySQLWorker(threading.Thread):
         self.query = command["query"][0]
         self.statsdsender = statsdsender
         super(MySQLWorker, self).__init__()
-        logging.warning("MySQLWorker created")
+        logging.debug("MySQLWorker created")
 
     def run(self):
     # Runs queries against server in an infinite loop
 
-        logging.warning("MySQLWorker started")
+        logging.debug("MySQLWorker started")
         while True:
             try:
                 db = MySQLdb.connect(host=self.mysql_host, user=self.mysql_user, passwd=self.mysql_password, db=self.mysql_database)
-            	dbcursor = db.cursor()
-            	dbcursor.execute(self.query)
-            	for rawdata in dbcursor.fetchone():
-                	metricdata = self.metricname+":"+str(rawdata)+"|c"
-            	self.statsdsender.send(metricdata)
-            	logging.debug(metricdata)
-            	db.close()
-            except:
-                logging.error("Cannot connect to MySQL host")
+                dbcursor = db.cursor()
+                dbcursor.execute(self.query)
+                rawdata = dbcursor.fetchone()
+                if dbcursor.rowcount>0:
+                    metricdata = self.metricname+":"+str(rawdata)+"|c"
+                    self.statsdsender.send(metricdata)
+                    logging.debug(metricdata)
+                else:
+                    logging.debug("No data")
+                db.close()
+            except Exception, e:
+                logging.error("DB error: %s", e)
             time.sleep(self.rate)
 
 
@@ -53,13 +57,16 @@ class StatsdSender(object):
         self.statsd_host = statsdconf["statsd_host"][0]
         self.statsd_port = int(statsdconf["statsd_port"][0])
         super(StatsdSender, self).__init__()
-        logging.warning("StatsdSender created")
+        logging.debug("StatsdSender created")
 
     def send(self, message):
         # Send data
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
-        sock.sendto(message, (self.statsd_host, self.statsd_port))
-
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
+            sock.sendto(message, (self.statsd_host, self.statsd_port))
+            sock.close()
+        except Exception, e:
+            logger.error("Send error: %s", e)
 
 class Mambo(object):
 # Main program. Initializes the logger, the statsd sender, and mysql workers
@@ -72,6 +79,7 @@ class Mambo(object):
         self.configfile = os.getenv('MAMBOCFG', '/etc/mambo/config.cnf')
         self.commandfile = os.getenv('MAMBOCMD', '/etc/mambo/commands.cnf')
         self.pidfile_timeout = 5
+        logging.info("Mambo started")
 
     def configreader(self, config, section):
         # Configuration reader helper. Reads keys/values from a given section, returns dict.
@@ -102,10 +110,7 @@ class Mambo(object):
     def run(self):
         # Main program thread.
 
-        logging.basicConfig(filename='/var/log/mambocollector.log', level=logging.DEBUG, format='%(asctime)s %(message)s')
-
         # Initializes workers
-        workers = []
         self.checkfile(self.configfile)
         # Read statsd configuration, and creates an instance
         statsdconf = self.configreader(self.configfile, 'statsd')
@@ -116,16 +121,25 @@ class Mambo(object):
         for command in commands:
             com = self.configreader(self.commandfile, command)
             worker = MySQLWorker(mysqlconf, com, statsd)
-            workers.append(worker)
-        for worker in workers:
-            worker.daemon = True
+            worker.setDaemon(True)
             worker.start()
         # Run 'till end.
         while True:
             time.sleep(10.0)
 
+if __name__ == '__main__':
 # Program execution starts here
 
-mambo = Mambo()
-mambo_runner = runner.DaemonRunner(mambo)
-mambo_runner.do_action()
+    try:
+        if os.getenv('MAMBODBG', '0') == '1':
+            loglevel = logging.DEBUG
+        else:
+            loglevel = logging.INFO
+        logging.basicConfig(filename=os.getenv('MAMBOLOG', '/var/log/mambocollector.log'), level=loglevel, format='%(asctime)s %(message)s')
+
+        mambo = Mambo()
+        mambo_runner = runner.DaemonRunner(mambo)
+        mambo_runner.do_action()
+    except Exception, e:
+        print e
+        sys.exit(1)
