@@ -26,12 +26,12 @@ class MySQLWorker(threading.Thread):
         self.query = command["query"][0]
         self.statsdsender = statsdsender
         super(MySQLWorker, self).__init__()
-        logging.debug("MySQLWorker created")
+        logger.debug("MySQLWorker created")
 
     def run(self):
     # Runs queries against server in an infinite loop
 
-        logging.debug("MySQLWorker started")
+        logger.debug("MySQLWorker started")
         while True:
             try:
                 db = MySQLdb.connect(host=self.mysql_host, user=self.mysql_user, passwd=self.mysql_password, db=self.mysql_database)
@@ -41,12 +41,12 @@ class MySQLWorker(threading.Thread):
                 if dbcursor.rowcount>0:
                     metricdata = self.metricname+":"+str(rawdata)+"|c"
                     self.statsdsender.send(metricdata)
-                    logging.debug(metricdata)
+                    logger.debug(metricdata)
                 else:
-                    logging.debug("No data")
+                    logger.debug("No data")
                 db.close()
             except Exception, e:
-                logging.error("DB error: %s", e)
+                logger.error("DB error: %s", e)
             time.sleep(self.rate)
 
 
@@ -57,7 +57,7 @@ class StatsdSender(object):
         self.statsd_host = statsdconf["statsd_host"][0]
         self.statsd_port = int(statsdconf["statsd_port"][0])
         super(StatsdSender, self).__init__()
-        logging.debug("StatsdSender created")
+        logger.debug("StatsdSender created")
 
     def send(self, message):
         # Send data
@@ -79,7 +79,7 @@ class Mambo(object):
         self.configfile = os.getenv('MAMBOCFG', '/etc/mambo/config.cnf')
         self.commandfile = os.getenv('MAMBOCMD', '/etc/mambo/commands.cnf')
         self.pidfile_timeout = 5
-        logging.info("Mambo started")
+        logger.info("Mambo started")
 
     def configreader(self, config, section):
         # Configuration reader helper. Reads keys/values from a given section, returns dict.
@@ -104,7 +104,7 @@ class Mambo(object):
             with open(file):
                 pass
         except IOError:
-            logging.error("Can't open file")
+            logger.error("Can't open file")
             exit(1)
 
     def run(self):
@@ -135,10 +135,17 @@ if __name__ == '__main__':
             loglevel = logging.DEBUG
         else:
             loglevel = logging.INFO
-        logging.basicConfig(filename=os.getenv('MAMBOLOG', '/var/log/mambocollector.log'), level=loglevel, format='%(asctime)s %(message)s')
+
+        logger = logging.getLogger("MamboLogger")
+        logger.setLevel(loglevel)
+        formatter = logging.Formatter("%(asctime)s %(message)s")
+        loghandler = logging.FileHandler(os.getenv('MAMBOLOG', '/var/log/mambocollector.log'))
+        loghandler.setFormatter(formatter)
+        logger.addHandler(loghandler)
 
         mambo = Mambo()
         mambo_runner = runner.DaemonRunner(mambo)
+        mambo_runner.daemon_context.files_preserve=[loghandler.stream]
         mambo_runner.do_action()
     except Exception, e:
         print e
