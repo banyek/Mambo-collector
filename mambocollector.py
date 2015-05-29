@@ -37,14 +37,12 @@ class MySQLWorker(threading.Thread):
                 db = MySQLdb.connect(host=self.mysql_host, user=self.mysql_user, passwd=self.mysql_password, db=self.mysql_database)
                 dbcursor = db.cursor()
                 dbcursor.execute(self.query)
-                rawdata = dbcursor.fetchone()
-                if dbcursor.rowcount>0:
+                for rawdata in dbcursor.fetchone():
                     metricdata = self.metricname+":"+str(rawdata)+"|c"
-                    self.statsdsender.send(metricdata)
-                    logger.debug(metricdata)
-                else:
-                    logger.debug("No data")
+                self.statsdsender.send(metricdata)
+                logger.debug(metricdata) 
                 db.close()
+
             except Exception, e:
                 logger.error("DB error: %s", e)
             time.sleep(self.rate)
