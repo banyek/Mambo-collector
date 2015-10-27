@@ -1,16 +1,32 @@
-#! /bin/bash
-# SAMPLE INIT FILE FOR REDHAT / CENTOS
-#
-# Start / Stop Mambo collector
-#
+#!/bin/sh
+
+# Mambo collerctor daemon start/stop script.
+
+# Comments to support LSB init script conventions
 ### BEGIN INIT INFO
-# Provides: $mambocollector
-# Required-Start: $mysql
+# Provides: mambocollector
+# Required-Start: $local_fs $network $remote_fs
+# Required-Stop: $local_fs $network $remote_fs
 # Default-Start:  2 3 4 5
 # Default-Stop: 0 1 6
 # Short-Description: MySQL Statsd data collector
 # Description: MySQL Statsd data collector
 ### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+DESC="MySQL Statsd data collector"
+
+DAEMON=/home/banyek/mambo/mambo
+
+# Define LSB log_* functions.
+. /lib/lsb/init-functions
+
+
+if ! test -f $DAEMON
+then
+	log_failure_msg "Couldn't find daemon ($DAEMON)"
+	exit 1
+fi
 
 # If the different parts are installed not in the default directory here you can overwrite their place
 # MAMBOCFG: Main config file. Can ve the same as the command file.
@@ -26,22 +42,30 @@
 # MAMBODBG: If set to 1 debugmessages will be shown up.
 # export MAMBODBG='1'
 
-
 case "$1" in
-   start)
-    /home/banyek/mambo/mambo start
-    RETVAL=$?
-    ;;
-   stop)
-    /home/banyek/mambo/mambo stop
-    RETVAL=$?
-    ;;
-   restart)
-    /home/banyek/mambo/mambo restart
-    RETVAL=$?
-    ;;
-   *)
-    echo "Usage: /etc/init.d/mambo start|stop|restart"
-    exit 1
-    ;;
+  start)
+	log_daemon_msg "Starting $DESC"
+	$DAEMON start > /dev/null 2>&1
+	RET=$?
+	log_end_msg $RET
+	exit $RET
+	;;
+  stop)
+	log_daemon_msg "Stopping $DESC"
+	$DAEMON stop > /dev/null 2>&1
+	RET=$?
+	log_end_msg $RET
+	exit $RET
+	;;
+  restart)
+	log_daemon_msg "Restarting $DESC"
+	$DAEMON restart > /dev/null 2>&1
+	RET=$?
+	log_end_msg $RET
+	exit $RET
+	;;
+  *)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
 esac
