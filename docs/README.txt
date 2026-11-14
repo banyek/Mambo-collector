@@ -1,57 +1,69 @@
 Mambo-collector
 ===============
 
-MySQL data collector for statsd.
+Mambo-collector runs configured MySQL queries and sends their results to StatsD
+over UDP. Each command has its own worker. Failed polls are logged and retried
+with backoff. A dead worker or a poll that takes more than 60 seconds causes the
+collector to exit with an error so a service supervisor can react.
 
-
-How it works
+Installation
 ------------
 
-+----------------+         +-----------------+       +-----------------+
-|    MySQL       |  <--->  |  Mambocollector |  ---> |     Statsd      |
-+----------------+         +-----------------+       +-----------------+
+Use Python 3.10 or newer with a supported security release. Install the MySQL
+client development libraries, pkg-config, and the Python build prerequisites
+for mysqlclient, then install the Python dependencies from requirements.txt:
 
-Long story short: the mambocollector runs predefinied SQL queries against a MySQL instance, and sends the results to a statsd server via UDP.
-After startup, the daemon starts one thread for logging purposes, and one thread for each mysql commands which is needed to run.
-All the command threads (MySQLWorker) initializes with connection parameters, and runs the defined query in defined time period until the daemon is not stopped. The logger thread gets log messages from workers, and writes them to the logfile.
+    python3 -m venv /opt/mambocollector/venv
+    /opt/mambocollector/venv/bin/python3 -m pip install -r requirements.txt
 
-Dependencies
-------------
+For a service installation, keep /opt/mambocollector, its virtual environment,
+and the installed mambocollector.py owned by root and writable only by root.
+Use a dedicated system user and group named mambocollector. Keep /etc/mambo and
+both configuration files under administrator control. For example, use
+root:mambocollector ownership with directory mode 0750 and file mode 0640.
+The password is stored in the main configuration file.
 
-* MySQLdb
-* daemon
-
-You can install them both with pip
+Use a dedicated MySQL user with only the permissions required for its queries.
+Grant SELECT only on the tables or views it needs. The process-list examples
+only see sessions visible to the collector account. Grant PROCESS only if
+monitoring all sessions is required, since it exposes other users' query text.
 
 Configuration
 -------------
 
-There is two configuration files used, one for the connection parameters, and the second one is for the commands themselves.
+Copy EXAMPLES/mambocollector.cfg.sample to /etc/mambo/config.cnf and replace the
+sample connection values. The [mysql] section requires mysql_host, mysql_user,
+mysql_password, and mysql_database. The [statsd] section requires statsd_host
+and statsd_port.
 
-* Config file
+Copy EXAMPLES/mambocollector.cmd.sample to /etc/mambo/commands.cnf. Each command
+section requires metricname, rate, and query, with optional metrictype:
 
-  It holds the connection parameters in standard .ini file format. The statsd parameters can be configured with the [statsd] section of configuration file, the 'statsd_host' and the 'statsd_port' parameters are configurable;
-  The MySQL config parameters are under [mysql] section, and 'mysql_host', 'mysql_user', 'mysql_password', 'hostname' parameters are configurable.
+- metricname accepts ASCII letters, digits, dots, underscores, and hyphens.
+- rate is a finite positive number of seconds between polls.
+- query must return exactly one row with one finite numeric value.
+- metrictype is c for a counter increment (the default) or g for a gauge.
 
-* Command file
+Adjust the heartbeat query to your schema or remove that section. The sample
+queries use gauges. To use one file, point both configuration variables at the
+same file and include the command sections alongside [mysql] and [statsd].
 
-  The command file contains the actual MySQL queries which will run against the database. Each command is represented with its own section, and the following parameters are configurable:
-  'metricname' the query will be sent to statsd server to put under this key
-  'rate' this parameter configures the frequency of datac ollection. Each worker thread sleeps 'rate' seconds between two queries
-  'query' This is the actual SQL query which will be run against the database to collect data.
+Running
+-------
 
-* Enviromental variables
+Set MAMBOCFG and MAMBOCMD to override the default configuration paths. Logs go
+to standard error by default. Set MAMBOLOG to write to a file, and set
+MAMBODBG=1 to enable debug logging.
 
-  The collector daemon can be fine tuned from different enviromental variables. I recommend to set up these variables in the daemon init scripts (See examples)
+    python3 mambocollector.py check
+    python3 mambocollector.py run
 
-  MAMBOPID pidfile location defaults to '/var/run/mambo.pid'
-  MAMBOCFG config file name, defaults to '/etc/mambo/config.cnf'
-  MAMBOCMD command file name, defaults to '/etc/mambo/commands.cnf'
+The check command validates configuration and dependency loading without
+connecting to MySQL or sending metrics. Run starts the collector in the
+foreground and stops on SIGTERM or Ctrl+C.
 
-
-Usage
------
-
-* mambocollector start
-* mambocollector stop
-* mambocollector restart
+For Debian-style SysV systems, install EXAMPLES/mambo.init as the root-owned
+executable /etc/init.d/mambocollector. Install mambocollector.py and its virtual
+environment at the paths above. Create /var/log/mambocollector with ownership
+mambocollector:mambocollector and mode 0750 before starting the service. Use the
+init script's start, stop, restart, and status commands to manage the process.

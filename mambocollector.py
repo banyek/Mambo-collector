@@ -1,150 +1,215 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
+"""Poll MySQL and send scalar metrics to StatsD."""
 
-import ConfigParser             # Read config files
-import threading                # Multithreading
-import MySQLdb                  # Connect Mysql
-import sys                      # Write data to stdout/stderr
-import time                     # time.sleep()
-import socket                   # Send data to statsd (UDP)
-import os                       # Get environmental variables
-import logging                  # Logging module
-from daemon import runner       # Run mambo as a daemon
-from datetime import datetime   # Write log messages
+import argparse
+from configparser import Error as ConfigParserError, RawConfigParser
+from contextlib import closing
+import logging
+import math
+import os
+import re
+import signal
+import socket
+import threading
+import time
+
+
+logger = logging.getLogger(__name__)
+IO_TIMEOUT = 5
+POLL_DEADLINE = 60
+MAX_RETRY_DELAY = 60
+METRIC_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+NUMERIC_VALUE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def read_config(path):
+    config = RawConfigParser()
+    try:
+        with open(path, encoding="utf-8") as stream:
+            config.read_file(stream)
+    except (ConfigParserError, UnicodeError) as error:
+        raise ValueError(f"{path}: invalid configuration ({type(error).__name__})") from error
+    return config
+
+
+def required(section, key, allow_empty=False):
+    value = section.get(key)
+    if value is None or (not value and not allow_empty):
+        raise ValueError(f"missing or empty {key}")
+    return value
+
+
+class StatsdSender:
+    def __init__(self, config):
+        self.host = required(config, "statsd_host")
+        try:
+            self.port = int(required(config, "statsd_port"))
+            if not 1 <= self.port <= 65535:
+                raise ValueError
+        except ValueError:
+            raise ValueError("statsd_port must be an integer from 1 to 65535") from None
+
+    def send(self, message):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(IO_TIMEOUT)
+            sock.sendto(message.encode("ascii"), (self.host, self.port))
+
+
+class InvalidResult(ValueError):
+    pass
 
 
 class MySQLWorker(threading.Thread):
-# MySQL Worker class. Connects to MySQL server, runs queries against it, and prepare data to send to Statsd.
+    def __init__(self, command, mysql_options, sender, connect, stop_event):
+        super().__init__(name=command.name, daemon=True)
+        self.metric_name = required(command, "metricname")
+        if not METRIC_NAME.fullmatch(self.metric_name):
+            raise ValueError("metricname may contain only ASCII letters, digits, dots, underscores, and hyphens")
+        self.metric_type = command.get("metrictype", "c")
+        if self.metric_type not in {"c", "g"}:
+            raise ValueError("metrictype must be c or g")
+        try:
+            self.rate = float(required(command, "rate"))
+            if not math.isfinite(self.rate) or not 0 < self.rate <= threading.TIMEOUT_MAX:
+                raise ValueError
+        except ValueError:
+            raise ValueError("rate must be a finite, positive polling interval in seconds") from None
+        self.query = required(command, "query")
+        self.mysql_options = mysql_options
+        self.sender = sender
+        self.connect = connect
+        self.stop_event = stop_event
+        self.poll_started = None
 
-    def __init__(self, mysqlconf, command, statsdsender):
-        self.mysql_host = mysqlconf["mysql_host"][0]
-        self.mysql_user = mysqlconf["mysql_user"][0]
-        self.mysql_password = mysqlconf["mysql_password"][0]
-        self.mysql_database = mysqlconf["mysql_database"][0]
-        self.metricname = command["metricname"][0]
-        self.rate = float(command["rate"][0])
-        self.query = command["query"][0]
-        self.statsdsender = statsdsender
-        super(MySQLWorker, self).__init__()
-        logger.debug("MySQLWorker created")
+    def poll(self):
+        with closing(self.connect(**self.mysql_options)) as db:
+            with closing(db.cursor()) as cursor:
+                cursor.execute(self.query)
+                row = cursor.fetchone()
+                if row is None or len(row) != 1 or cursor.fetchone() is not None:
+                    raise InvalidResult("query must return exactly one row with one column")
+
+        value = str(row[0])
+        if not NUMERIC_VALUE.fullmatch(value) or not math.isfinite(float(value)):
+            raise InvalidResult("query must return a finite numeric value")
+        value = value.lstrip("+")
+        message = f"{self.metric_name}:{value}|{self.metric_type}"
+        if self.metric_type == "g" and value.startswith("-"):
+            # In StatsD, a signed gauge value is relative to the current value.
+            message = f"{self.metric_name}:0|g\n{message}"
+        if not self.stop_event.is_set():
+            self.sender.send(message)
+            logger.debug("Sent metric %s", self.metric_name)
 
     def run(self):
-    # Runs queries against server in an infinite loop
-
-        logger.debug("MySQLWorker started")
-        while True:
+        retry_delay = min(max(self.rate, 1), MAX_RETRY_DELAY)
+        delay = self.rate
+        while not self.stop_event.is_set():
+            self.poll_started = time.monotonic()
             try:
-                db = MySQLdb.connect(host=self.mysql_host, user=self.mysql_user, passwd=self.mysql_password, db=self.mysql_database)
-                dbcursor = db.cursor()
-                dbcursor.execute(self.query)
-                for rawdata in dbcursor.fetchone():
-                    metricdata = self.metricname+":"+str(rawdata)+"|c"
-                self.statsdsender.send(metricdata)
-                logger.debug(metricdata) 
-                db.close()
+                self.poll()
+            except Exception as error:
+                delay = max(self.rate, retry_delay)
+                # Driver errors can contain query text or connection details.
+                detail = str(error) if isinstance(error, InvalidResult) else type(error).__name__
+                logger.error("[%s] Collection failed (%s). Retrying in %g seconds.",
+                             self.name, detail, delay)
+                retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
+            else:
+                delay = self.rate
+                retry_delay = min(max(self.rate, 1), MAX_RETRY_DELAY)
+            finally:
+                self.poll_started = None
+            self.stop_event.wait(delay)
 
-            except Exception, e:
-                logger.error("DB error: %s", e)
-            time.sleep(self.rate)
 
-
-class StatsdSender(object):
-# This class sends data to Statsd server
-
-    def __init__(self, statsdconf):
-        self.statsd_host = statsdconf["statsd_host"][0]
-        self.statsd_port = int(statsdconf["statsd_port"][0])
-        super(StatsdSender, self).__init__()
-        logger.debug("StatsdSender created")
-
-    def send(self, message):
-        # Send data
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
-            sock.sendto(message, (self.statsd_host, self.statsd_port))
-            sock.close()
-        except Exception, e:
-            logger.error("Send error: %s", e)
-
-class Mambo(object):
-# Main program. Initializes the logger, the statsd sender, and mysql workers
-
-    def __init__(self):
-        self.stdin_path = '/dev/null'
-        self.stdout_path = '/dev/tty'
-        self.stderr_path = '/dev/tty'
-        self.pidfile_path = os.getenv('MAMBOPID', '/var/run/mambo.pid')
-        self.configfile = os.getenv('MAMBOCFG', '/etc/mambo/config.cnf')
-        self.commandfile = os.getenv('MAMBOCMD', '/etc/mambo/commands.cnf')
-        self.pidfile_timeout = 5
-        logger.info("Mambo started")
-
-    def configreader(self, config, section):
-        # Configuration reader helper. Reads keys/values from a given section, returns dict.
-        cnf = ConfigParser.RawConfigParser()
-        cnf.read(config)
-        configItems = cnf.items(section)
-        configuration = {}
-        for key, value in configItems:
-            configuration.setdefault(key, []).append(value)
-        return configuration
-
-    def commandreader(self, commandfile):
-        # Reads commands from commandfile. (Reads section names from an ini file, returns a list)
-        cmd = ConfigParser.RawConfigParser()
-        cmd.read(commandfile)
-        commands = cmd.sections()
-        return commands
-
-    def checkfile(self, file):
-        # Checks file if exists.
-        try:
-            with open(file):
-                pass
-        except IOError:
-            logger.error("Can't open file")
-            exit(1)
-
-    def run(self):
-        # Main program thread.
-
-        # Initializes workers
-        self.checkfile(self.configfile)
-        # Read statsd configuration, and creates an instance
-        statsdconf = self.configreader(self.configfile, 'statsd')
-        statsd = StatsdSender(statsdconf)
-        # Reads mysql configs and mysql commands, sets up mysql workers
-        mysqlconf = self.configreader(self.configfile, 'mysql')
-        commands = self.commandreader(self.commandfile)
-        for command in commands:
-            com = self.configreader(self.commandfile, command)
-            worker = MySQLWorker(mysqlconf, com, statsd)
-            worker.setDaemon(True)
-            worker.start()
-        # Run 'till end.
-        while True:
-            time.sleep(10.0)
-
-if __name__ == '__main__':
-# Program execution starts here
-
+def load_workers(config_path, command_path, connect, stop_event):
+    config = read_config(config_path)
     try:
-        if os.getenv('MAMBODBG', '0') == '1':
-            loglevel = logging.DEBUG
-        else:
-            loglevel = logging.INFO
+        sender = StatsdSender(config["statsd"])
+        mysql = config["mysql"]
+        mysql_options = {
+            "host": required(mysql, "mysql_host"),
+            "user": required(mysql, "mysql_user"),
+            "password": required(mysql, "mysql_password", allow_empty=True),
+            "database": required(mysql, "mysql_database"),
+            "connect_timeout": IO_TIMEOUT,
+            "read_timeout": IO_TIMEOUT,
+            "write_timeout": IO_TIMEOUT,
+            "local_infile": False,
+        }
+    except (KeyError, ValueError) as error:
+        raise ValueError(f"{config_path}: {error}") from error
 
-        logger = logging.getLogger("MamboLogger")
-        logger.setLevel(loglevel)
-        formatter = logging.Formatter("%(asctime)s %(message)s")
-        loghandler = logging.FileHandler(os.getenv('MAMBOLOG', '/var/log/mambocollector.log'))
-        loghandler.setFormatter(formatter)
-        logger.addHandler(loghandler)
+    commands = config if command_path == config_path else read_config(command_path)
+    sections = [name for name in commands.sections()
+                if commands is not config or name not in {"mysql", "statsd"}]
+    if not sections:
+        raise ValueError(f"{command_path}: no command sections configured")
+    workers = []
+    for section in sections:
+        try:
+            workers.append(MySQLWorker(commands[section], mysql_options, sender, connect, stop_event))
+        except ValueError as error:
+            raise ValueError(f"{command_path} [{section}]: {error}") from error
+    return workers
 
-        mambo = Mambo()
-        mambo_runner = runner.DaemonRunner(mambo)
-        mambo_runner.daemon_context.files_preserve=[loghandler.stream]
-        mambo_runner.do_action()
-    except Exception, e:
-        print e
-        sys.exit(1)
+
+def supervise(workers, stop_event):
+    for worker in workers:
+        worker.start()
+    while not stop_event.wait(1):
+        for worker in workers:
+            started = worker.poll_started
+            if not worker.is_alive():
+                raise RuntimeError(f"[{worker.name}] worker exited unexpectedly")
+            if started is not None and time.monotonic() - started > POLL_DEADLINE:
+                raise RuntimeError(f"[{worker.name}] collection exceeded {POLL_DEADLINE} seconds")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("run", "check"), nargs="?", default="run")
+    args = parser.parse_args()
+    try:
+        logging.basicConfig(
+            filename=os.getenv("MAMBOLOG"),
+            format="%(asctime)s %(levelname)s %(message)s",
+            level=logging.DEBUG if os.getenv("MAMBODBG") == "1" else logging.INFO,
+        )
+        import MySQLdb
+
+        stop_event = threading.Event()
+        workers = load_workers(
+            os.getenv("MAMBOCFG", "/etc/mambo/config.cnf"),
+            os.getenv("MAMBOCMD", "/etc/mambo/commands.cnf"),
+            MySQLdb.connect,
+            stop_event,
+        )
+        if args.action == "check":
+            return 0
+
+        def stop(signum, frame):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
+        logger.info("Starting %d collection workers", len(workers))
+        try:
+            supervise(workers, stop_event)
+        finally:
+            stop_event.set()
+            deadline = time.monotonic() + IO_TIMEOUT
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(max(0, deadline - time.monotonic()))
+    except KeyboardInterrupt:
+        return 0
+    except (ImportError, OSError, ValueError, RuntimeError) as error:
+        logger.error("%s", error)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

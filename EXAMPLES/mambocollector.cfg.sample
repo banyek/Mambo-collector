@@ -1,18 +1,10 @@
-# Sample configuration file for mambo-collector
-#
-# (c) Balazs Pocze <banyek@gmail.com>
-#
-# The configuration file has two parts, the first contains the connection parameters which will be used to connect the local mysql server
-# and to send data to statsd daemon.
-#
-# [mysql]
-#
-# mysql_host = localhost
-# mysql_user = username
-# mysql_password = password
-# hostname = localhost.localdomain
-# 
-# [statsd]
-#
-# statsd_host = 192.168.1.1
-# statsd_port = 8125
+# Copy to /etc/mambo/config.cnf and set the connection values.
+[mysql]
+mysql_host = localhost
+mysql_user = mambocollector
+mysql_password = change-me
+mysql_database = test
+
+[statsd]
+statsd_host = 127.0.0.1
+statsd_port = 8125
